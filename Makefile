@@ -1,9 +1,10 @@
 lc=python3
 file=create_icar_zarr.py
+file=create_icar_zarr_charts.py
 
 all: build
 
-build: cleandata
+build:
 	$(lc) $(file)
 
 clean:
