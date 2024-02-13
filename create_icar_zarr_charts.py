@@ -1,129 +1,139 @@
-import xarray as xr
 import pandas as pd
-import ndpyramid as ndp
-import rioxarray
-
+import numpy as np
 import sys
+import xarray as xr
 import zarr
-from numcodecs import Zlib
 
+from tools import dimensionNames
 
-if ndp.__version__ != '0.1.0':
-    print(f"Error: ndpyramid version {ndp.__version__} != required 0.1.0")
-    sys.exit(0)
+# --- combination of downscaling methods and climate models to create data
+downscaling_methods = [
+    'icar',
+    'gard',
+    'LOCA',
+    'bcsd',]
+climate_models = [
+    'noresm',
+    'cesm',
+    'gfdl',
+    'miroc5',]
+time = 'time'
 
+# main: open input data, manipulate it, write to zarr
+def main():
+    data_paths, method, model = get_arguments()
+    ds = open_data_srcs(data_paths)
+    print("Opened", method, "downscaling method and", model, "climate model")
 
-print("Setting up Compressor")
+    ds = rename_dimensions(ds, method, model)
+    ds = drop_extra_dimensions(ds)
+    ds = handle_time_dimension(ds)
 
-# enc = zlib.Zlib()
-# compressor = zarr.Blosc(cname="zlib",clevel=1)
+    # ds = convert_to_zarr_format(ds) # already in single precision
+    write_to_zarr(ds, method, model)
 
+    print('fin')
+    sys.exit()
 
+# argument check
+def get_arguments():
+    if len(sys.argv) < 2:
+        print("Usage: python script.py <dir_path> [<file1> <file2> ...]")
+        sys.exit(0)
+    data_path = sys.argv[1]
+    data_files = sys.argv[2:]
+    fullpaths = combine_path_and_files(data_path, data_files)
+    method, model = get_method_and_model(fullpaths[0])
+    return fullpaths, method, model
 
-VERSION = 2
-# LEVELS = 6
-# PIXELS_PER_TILE = 128
+def get_method_and_model(f):
+    found = False
+    method = None
+    model = None
+    for m in downscaling_methods:
+        if (m in f):
+            if found:
+                print("Error: multiple methods found in path")
+            found = True
+            method = m
+    found = False
+    for m in climate_models:
+        if (m in f):
+            if found:
+                print("Error: multiple models found in path")
+            found = True
+            model = m
 
+    if (method == None) or (model == None):
+        print("Error: method =", method, ", model =", model)
+    return method.lower(), model.lower()
 
-input_path = '/glade/work/soren/src/icar/data/icar-zarr-data/data_input'
-save_path = f"data_zarr/icar-noresm"
+def combine_path_and_files(data_path, data_files):
+    combined_paths = []
+    for f in data_files:
+        combined_paths.append(data_path + '/' + f)
+    return combined_paths
 
-# input dataset
-# only noresm_hist_exl_conv_2000_2005.nc
+def open_data_srcs(data_srcs):
+    print("OPENING ", data_srcs)
+    if (len(data_srcs) == 1):
+        ds = xr.open_dataset(data_srcs[0])
+    else:
+        datasets = []
+        for f in data_srcs:
+            datasets.append(xr.open_dataset(f))
+        ds = xr.concat(datasets, dim='time')
+    return ds
 
-ds1 = []
-# months = list(map(lambda d: d + 1, range(12)))
-path = f"{input_path}/noresm_hist_exl_conv_2000_2005.nc"
-print("Opening", path)
-ds1 = xr.open_dataset(path) #, engine="netcdf4")
+def rename_dimensions(ds, method, model):
+    new_dims = dimensionNames.get_dimension_name(method, model)
+    ds = ds.rename(new_dims)
+    return ds
 
+def drop_extra_dimensions(ds):
+    print(ds)
+    vars_to_keep = [time, 'y', 'x', 'prec', 'tavg']
+    vars_to_drop = [var for var in ds.variables if var not in vars_to_keep]
+    ds = ds.drop_vars(vars_to_drop)
+    return ds
 
-print("Selecting time frame")
+def handle_time_dimension(ds):
+    print("Creating spatial and monthly average")
+    print("   - if silent failure, run on interactive node")
 
-daily_avg_precip = ds1['pcp'].mean(dim=['lat', 'lon'])
-daily_avg_temp = ds1['t_mean'].mean(dim=['lat', 'lon'])
-daily_min_temp = ds1['t_min'].mean(dim=['lat', 'lon'])
-daily_max_temp = ds1['t_max'].mean(dim=['lat', 'lon'])
+    # --- smaller time slice for testing
+    # print("REMOVE 1999-2001 TIME SLICE")
+    # ds = ds.sel(time=slice("1999","2001"))
 
-monthly_avg_precip = daily_avg_precip.resample(time='1M').mean(dim='time')
-monthly_avg_temp = daily_avg_temp.resample(time='1M').mean(dim='time')
-monthly_min_temp = daily_min_temp.resample(time='1M').mean(dim='time')
-monthly_max_temp = daily_max_temp.resample(time='1M').mean(dim='time')
+    spatial_avg_precip = ds['prec'].mean(dim=['y', 'x'])
+    spatial_avg_temp = ds['tavg'].mean(dim=['y', 'x'])
+    monthly_avg_precip = spatial_avg_precip.resample(time='MS').mean(dim='time')
+    monthly_avg_temp = spatial_avg_temp.resample(time='MS').mean(dim='time')
 
-ds1 = xr.Dataset({'pcp': monthly_avg_precip,
-                  't_mean': monthly_avg_temp,
-                  't_min': monthly_min_temp,
-                  't_max': monthly_max_temp
+    ds = xr.Dataset({'prec': monthly_avg_precip,
+                     'tavg': monthly_avg_temp
+    #                   # 't_min': monthly_min_temp,
+    #                   # 't_max': monthly_max_temp
                   })
-print("Transforming variables to match website")
-# --- transform to dataset for website, test ---
 
-# rename dimensions
-ds1 = ds1.rename({'time':'month',
-                  # 'lat_y':'y',
-                  # 'lon_x':'x',
-                  # 'lat':'y',
-                  # 'lon':'x',
-                  # 'precipitation':'prec',
-                  'pcp':'prec',
-                  # 'ta2m':'tavg'
-                  't_mean':'tavg',
-                  't_min':'tmin',
-                  't_max':'tmax'
-                  })
-# add climate (aka variable) dimension
-# print(" - add climate (aka variable) dimension")
-# var1='prec'; var2='tavg'
-# ds1['climate'] = xr.concat([ds1[var1], ds1[var2]],
-#                            dim='band')
-# encodings
-# enc = {x: {"compressor": compressor} for x in ds1}
-print("Write to Zarr")
-# comp = dict(zlib=True, complevel=1)
-# for var in ds1.data_vars:
-#     var.encoding.update(comp)
-# ds1.to_zarr(save_path + '/monthly_prec_tmps', consolidated=True, encoding=enc)
-# ds1.to_zarr(save_path + '/monthly_prec_tmps', encoding=Zlib(level=1))
-# ds1.to_zarr(save_path + '/monthly_prec_tmps', encoding=None)
-# ds1.to_zarr(save_path + '/monthly_prec_tmps') #, consolidated=True)
+    return ds
 
-ds1.to_netcdf(save_path + '/monthly_prec_tmps.nc')#, format="NETCDF3_CLASSIC")
-sys.exit()
+def write_to_zarr(ds, method, model):
+    print("Writing to zarr format")
+    save_path = f'data/chart/' + method + '/' + model
+    prec_save_path = save_path + '/prec'
+    tavg_save_path = save_path + '/tavg'
 
+    print("WARNING: NEED TO ADD LARGER TIME FRAME")
+    # write precip
+    z_prec = zarr.open(prec_save_path, mode='w', shape=len(ds.prec),
+                  compressor=None, dtype=np.float32)
+    z_prec[:] = ds.prec.data
 
-# cleanup variables
-keep_vars = ['climate']
-all_vars = list(ds1.data_vars)
-remove_vars = [var for var in all_vars if var not in keep_vars]
-ds1 = ds1.drop_vars(remove_vars)
+    # write temp
+    z_temp = zarr.open(tavg_save_path, mode='w', shape=len(ds.tavg),
+                  compressor=None, dtype=np.float32)
+    z_temp[:] = ds.tavg.data
 
-# add band coordinates
-print(" - add band coordinates")
-band_var_names = ['prec','tavg']
-fixed_length = 4
-var_names_U4 = [s[:fixed_length].ljust(fixed_length) for s in band_var_names]
-ds1 = ds1.assign_coords(band=var_names_U4)
-
-
-# --- clean up types
-print(" - clean up types")
-# month to int type
-ds1['month'] = xr.Variable(dims=('month',),
-                           data=list(range(1, 12 + 1)))
-                           # data=list(range(1, ds1.month.shape[0] + 1)))
-                           # attrs={'dtype': 'int32'})
-ds1["month"] = ds1["month"].astype("int32")
-ds1["climate"] = ds1["climate"].astype("float32")
-ds1["band"] = ds1["band"].astype("str")
-ds1.attrs.clear()
-
-
-# --- force to be like their data
-print (" - force to be like their data[??]")
-ds1 = ds1.where(ds1.month<=12, drop=True)
-
-
-print("Write to Zarr")
-# write the pyramid to zarr, defaults to zarr_version 2
-# consolidated=True, metadata files will have the information expected by site
-dt.to_zarr(save_path + '/4d-ndp0.1/tavg-prec-month', consolidated=True)
+if __name__ == "__main__":
+    main()
