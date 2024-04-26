@@ -1,10 +1,15 @@
 # Host ICAR Zarr Data
+## Prepare Data
+Either [create data](#Create Data) or copy it over.
+To copy the data edit the [Makefile](Makefile) and run `make scp untar` to copy the data from Derecho and untar it.
+## Host Site
 Once data is created the user can host the data locally for local development.
 Running `make host` or the following command will start a local server.
 ```
 $ python host_server.py
 ```
 The data is available at `localhost:4000` and can be accessed from a browser.
+
 
 
 # ICAR Zarr Data
