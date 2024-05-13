@@ -1,3 +1,5 @@
 ndpyramid=0.1.0
 netcdf4
 xarray
+rioxarray
+dask
