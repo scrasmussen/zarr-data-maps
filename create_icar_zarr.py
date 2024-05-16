@@ -1,4 +1,5 @@
 import xarray as xr
+import os
 import pandas as pd
 import ndpyramid as ndp
 import rioxarray
@@ -7,21 +8,39 @@ import zarr
 from tools import dimensionNames, handleArgs
 
 # --- combination of downscaling methods and climate models to create data
+# old
+# downscaling_methods = [
+#     'icar',
+#     'gard',
+#     'LOCA',
+#     'bcsd',]
+# climate_models = [
+#     'noresm',
+#     'cesm',
+#     'gfdl',
+#     'miroc5',]
+# new
+# [model].[method].ds.conus.metric.maps.nc
 downscaling_methods = [
-    'icar',
-    'gard',
-    'LOCA',
-    'bcsd',]
+    'ICAR',
+    'ICARwest',
+    'GARD_r2',
+    'GARD_r3',
+    'GARDwest',
+    'LOCA_8th',
+    'MACA',
+    'NASA-NEX',]
 climate_models = [
-    'noresm',
-    'cesm',
-    'gfdl',
-    'miroc5',]
+    'ACCESS1-3',
+    'CanESM2',
+    'CCSM4',
+    'MIROC5',
+    'NorESM1-M',]
 
 # set these somewhere else?
 VERSION = 2
 LEVELS = 6
-PIXELS_PER_TILE = 128
+PIXELS_PER_TILE = 256
 time = 'time'
 time_slices=[slice("1980","2010"), slice("2070","2100")]
 time_slice_strs=['1980_2010', '2070_2100']
@@ -29,6 +48,10 @@ time_slice_strs=['1980_2010', '2070_2100']
 # time_slice_str='1980_2010'
 time_slice=slice("2070","2100")
 time_slice_str='2070_2100'
+
+# testing new
+time_slice_str='1980_2010'
+
 
 def create_comparison_combinations(comparison_paths):
     method_combinations = itertools.product(downscaling_methods, repeat=2)
@@ -70,12 +93,97 @@ def comparisons():
             break
 
     print('Fin')
+# {model}.{method}.ds.conus.metric.maps.nc
+def new_handleArgs(downscaling_methods, climate_models):
+    data_path = sys.argv[1]
+    data_paths = []
+    methods = []
+    models = []
+    for cm in climate_models:
+        for dm in downscaling_methods:
+            filepath = data_path+'/'+cm+'.'+dm+'.ds.conus.metric.maps.nc'
+            data_paths.append(filepath)
+            methods.append(dm)
+            models.append(cm)
+    return data_paths, methods, models
 
 def main():
     print("--- Starting Zarr Data Maps Setup ---")
     library_check()
-    data_paths, method, model = handleArgs.get_arguments(downscaling_methods, climate_models)
+    # data_paths, method, model = handleArgs.get_arguments(downscaling_methods, climate_models)
+    data_paths, methods, models = new_handleArgs(downscaling_methods, climate_models)
+    # print(data_paths)
+    # print(method)
+    # print(model)
+    for i,path in enumerate(data_paths):
+        # print(path)
+        if not os.path.exists(path):
+            print("does not exist:", path)
+            continue
+        method = methods[i]
+        model = models[i]
+        print("Opened", method, "downscaling method and", model, "climate model")
+        ds = xr.open_dataset(path)
 
+        # rename dimensions
+        # 'lat_y': y_name,
+        # 'lon_x': x_name,
+        new_dims = {#'time': 'time',
+                    'lat': 'y',
+                    'lon': 'x',
+                    'n34pr':'n34p',
+                    'ttrend':'ttre',
+                    'ptrend':'ptre',
+                    't90':'t90_',
+                    't99':'t99_',
+                    'djf_t':'djft',
+                    'djf_p':'djfp',
+                    'mam_t':'mamt',
+                    'mam_p':'mamp',
+                    'jja_t':'jjat',
+                    'jja_p':'jjap',
+                    'son_t':'sont',
+                    'son_p':'sonp',
+        }
+        ds = ds.rename(new_dims)
+        variables = list(ds.variables.keys())
+        variables = [var for var in variables if var not in ['x', 'y']]
+        print(variables)
+        sys.exit()
+        # don't need to average and handle time dimension
+        # - [ ] do i need to handle time?
+        # don't need to drop extra dimensions
+        # add climate dimension
+        # add climate (aka variable) dimension
+        print(" - add climate (aka variable) dimension")
+        # variables = ['prec', 'tavg']
+        fixed_length = 4
+        concatenated_vars = []
+        for var_name in variables:
+            concatenated_vars.append(ds[var_name])
+        ds['climate'] = xr.concat(concatenated_vars, dim='band')
+        var_names_U4 = [s[:fixed_length].ljust(fixed_length) for s in variables]
+        ds = ds.assign_coords(band=var_names_U4)
+        ds = ds.drop_vars(set(ds.data_vars) - set(['climate']))
+        # --- clean up types
+        print(" - clean up types")
+        # month to int type
+        ds['month'] = xr.Variable(dims=('month',),
+                           data=list(range(1, 12 + 1)))
+                           # data=list(range(1, ds.month.shape[0] + 1)))
+                           # attrs={'dtype': 'int32'})
+        ds["month"] = ds["month"].astype("int32")
+        ds["climate"] = ds["climate"].astype("float32")
+        ds["band"] = ds["band"].astype("str")
+        ds.attrs.clear()
+        ds = convert_to_zarr_format(ds) # already in single precision
+
+        write_to_zarr(ds, method, model)
+
+        print(ds)
+        sys.exit()
+
+    sys.exit()
     ds = open_data_srcs(data_paths)
     print("Opened", method, "downscaling method and", model, "climate model")
 
@@ -336,7 +444,7 @@ def convert_to_zarr_format(ds):
 
 def write_to_zarr(ds, method, model):
     print("Writing to zarr format")
-    save_path = f'data/map/' + method + '/' + model + '/' + time_slice_str
+    save_path = f'data/new256/' + method + '/' + model + '/' + time_slice_str
     prec_save_path = save_path + '/prec'
     tavg_save_path = save_path + '/tavg'
 
@@ -370,16 +478,18 @@ def create_pyramid(ds):
     # EPSG:4326 fixes error:
     #    MissingCRS: CRS not found. Please set the CRS with 'rio.write_crs()'
     ds = ds.rio.write_crs('EPSG:4326')
+    print("debugging 1")
     dt = ndp.pyramid_reproject(ds,
                                levels=LEVELS,
                                pixels_per_tile=PIXELS_PER_TILE,
                                extra_dim='band')
-
+    print("debugging 2")
     dt = ndp.utils.add_metadata_and_zarr_encoding(dt,
                                                   levels=LEVELS,
                                                   pixels_per_tile=PIXELS_PER_TILE)
+    print("Done Creating Pyramid")
     return dt
 
 if __name__ == "__main__":
-    # main()
-    comparisons()
+    main()
+    # comparisons()
