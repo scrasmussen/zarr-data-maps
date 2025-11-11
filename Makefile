@@ -1,8 +1,6 @@
+.PHONY:dl
 lc=python3
-username=USERNAME
-cluster=${username}@derecho.hpc.ucar.edu
-clusterpath=/glade/work/${username}/path/to/data
-
+data_script=create_global_zarr.py
 
 all: host
 
@@ -11,55 +9,59 @@ host:
 
 build: build_zarr_data
 
+help:
+	python $(data_script) --help
 
-scp:
-	scp $(cluster):$(clusterpath)/map/icar-map.tar.gz .
-	scp $(cluster):$(clusterpath)/chart/icar-chart.tar.gz .
+# download and extract data from hydro.rap.ucar.edu/hydro-climate-eval/data
+dl: download
+download:
+	make -C data/map download
 
 untar:
-	tar zxf icar-map.tar.gz
-	mv icar data/map/
-	tar zxf icar-chart.tar.gz
-	mv icar data/chart/
+	make -C data/map/ untar
 
-icar_path=/glade/campaign/ral/hap/trude/conus_icar/qm_data
+# --- create maps from NetCDF files ---
+# paths to files for data creation
+maps_path=data/input/maps
+obs_path=data/input/obs
+metric_path=data/input/metrics
+output_path=data/output
 
-# 1980-2010
-icar_noresm_files=noresm_hist_exl_conv.nc
-icar_cesm_files=cesm_hist_exl_conv.nc
-icar_gfdl_files=gfdl_hist_exl_conv.nc
-icar_miroc5_files=miroc5_hist_exl_conv.nc
-
-# 2070-2100
-icar_noresm_files=noresm_rcp45_exl_conv.nc
-icar_cesm_files=cesm_rcp45_exl_conv.nc
-icar_gfdl_files=gfdl_rcp45_exl_conv.nc
-icar_miroc5_files=miroc5_rcp45_exl_conv.nc
-
-icar_zarr_path=data/map
-
-# all: build_comparison
-build_comparison:
-	python3 create_icar_zarr.py ${icar_zarr_path} tavg-prec-month.zarr
-
-build_zarr_data:
-	python3 create_icar_zarr.py ${icar_path} ${icar_noresm_files}
-	python3 create_icar_zarr.py ${icar_path} ${icar_cesm_files}
-	python3 create_icar_zarr.py ${icar_path} ${icar_gfdl_files}
-	python3 create_icar_zarr.py ${icar_path} ${icar_miroc5_files}
-
-build_icar_charts:
-	# python3 create_icar_zarr_charts.py ${icar_path} ${icar_noresm_files}
-	# python3 create_icar_zarr_charts.py ${icar_path} ${icar_cesm_files}
-	# python3 create_icar_zarr_charts.py ${icar_path} ${icar_gfdl_files}
-	# python3 create_icar_zarr_charts.py ${icar_path} ${icar_miroc5_files}
-
-
-tar:
-	cd data/map; tar -czvf icar.tar.gz icar
+maps:
+        rm -rf ${output_path}/maps/*
+        python3 $(data_script) \
+        ${maps_path} \
+        ${obs_path} \
+        ${metric_path} \
+        --maps ${output_path}/maps
+metrics:
+        python3 $(data_script) \
+        ${maps_path} \
+        ${obs_path} \
+        ${metric_path} \
+        --metric-score ${output_path}/metric
+climatesignal:
+        rm -rf ${output_path}/climateSignal/*
+        python3 $(data_script) \
+        ${maps_path}/ \
+        ${obs_path} \
+        ${metric_path} \
+        --climate-signal ${output_path}/climateSignal/
+obs:
+        rm -rf ${output_path}/obs/*
+        python3 $(data_script) \
+        ${maps_path} \
+        ${obs_path} \
+        ${metric_path} \
+        --obs ${output_path}/obs
+yaml:
+        python3 $(data_script) \
+        ${maps_path} \
+        ${obs_path} \
+        ${metric_path} \
+        --write-yaml
 
 clean:
 	rm -f *~
 cleandata:
-	# rm -rf icar_zarr
-	# rm -rf downscaling
+	rm -rf data/output
