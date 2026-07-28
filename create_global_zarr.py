@@ -1,5 +1,6 @@
 import argparse
 from collections import defaultdict
+from datetime import date
 import glob
 import itertools
 import json
@@ -327,6 +328,24 @@ def writeDatasetToZarr(output_path, dataset=None,
         'drought_5yr':'d5yr',
         'wt_clim':'wtcl',
         'wt_day_to_day':'wtds',
+        # --- new metrics:
+        # {ann,seasonal}_iav_{t,p}, ann_snow_iav,
+        # pr_gev_{20,50,100}yr, wet_day_frac
+        'ann_p_iav':'anpi',
+        'djf_p_iav':'djpi',
+        'mam_p_iav':'mapi',
+        'jja_p_iav':'jjpi',
+        'son_p_iav':'sopi',
+        'ann_t_iav':'anti',
+        'djf_t_iav':'djti',
+        'mam_t_iav':'mati',
+        'jja_t_iav':'jjti',
+        'son_t_iav':'soti',
+        'ann_snow_iav':'ansi',
+        'pr_gev_20yr':'g_20',
+        'pr_gev_50yr':'g_50',
+        'pr_gev_100yr':'g100',
+        'wet_day_frac':'wdfr',
     }
 
     # lowercase dimension names
@@ -350,6 +369,7 @@ def writeDatasetToZarr(output_path, dataset=None,
         print("vars:", list(ds.data_vars))
         print("---")
         print("error: some of the names are the wrong length, != 4")
+        print("bad_names =", bad_names)
         sys.exit()
 
     # zarr format requires variables four characters in length
@@ -420,8 +440,8 @@ def writeDatasetToZarr(output_path, dataset=None,
     # sys.exit()
 
     write_to_zarr(dz, write_path)
-    print('fin writeDatasetToZarr : write_path=', write_path)
-    sys.exit()
+    print('exit writeDatasetToZarr : write_path=', write_path)
+    # sys.exit()
 
 
 def write_to_zarr(ds, output_path, zarr_file='data.zarr'):
@@ -440,7 +460,8 @@ def addEnsembleDatasets(datasets):
         for ens in ds['ens'].values:
             new_ds = Dataset(d.file_path,
                              d.ds_type,
-                             'hist.'+d.era,
+                             d.era,
+                             # 'hist.'+d.era,
                              d.region,
                              method = d.method,
                              model = d.model,
@@ -519,7 +540,7 @@ def findDatasets(input_path, suffix, ds_type):
                     climate_model + '.' + \
                     downscaling_method + '.' + \
                     suffix
-            elif len(parts) not in [6,8,9]:
+            elif len(parts) not in [6,7,8,9]:
                 print("Error: can't parse maps file, len(parts) not in [6,8,9]")
                 print(parts)
                 print(f"len(parts) = {len(parts)}")
@@ -556,6 +577,22 @@ def findDatasets(input_path, suffix, ds_type):
                     'ds.' + \
                     region + \
                     '.metrics.nc'
+            elif len(parts) == 7:
+                # CIESM.cmip6.ssp245.global.metric.maps.nc
+                # filename in format of
+                # [cm].[dm].[era].[region].[suffix]
+                # dm is cmip{5,6}
+                # era is rcp{45,85,} or ssp{245,370,585}
+                climate_model = parts[0]
+                downscaling_method = parts[1]
+                era = parts[2]
+                region = parts[3]
+                file_path = input_path + '/' + \
+                    climate_model + '.' + \
+                    downscaling_method + '.' + \
+                    era + '.' + \
+                    region + \
+                    '.metric.maps.nc'
             elif len(parts) == 6:
                 # filename in format of
                 # [cm].[dm].[region].[suffix]
@@ -665,12 +702,16 @@ def findCmipObsDatasets(input_path, suffix, ds_type):
 
 
 def handleClimateSignalArgs(input_path):
+
     rcps = ['rcp45.2076-2099', 'rcp85.2076-2099']
     rcps += ['rcp45.2056-2079', 'rcp85.2056-2079']
     rcps += ['rcp45.2036-2059', 'rcp85.2036-2059']
+    rcp_vals = ['45', '85']
+    years = ['2024-2059','2044-2079','2064-2099']
+    rcps = ['rcp' + r + '.' + y for r in rcp_vals for y in years]
 
     datasets = []
-    era = 'hist.1981-2004'
+    era = 'hist.1981-2016'
 
     regions = ['DesertSouthwest',  'GreatLakes',  'GulfCoast',
                'MidAtlantic',  'MountainWest',  'NorthAtlantic',
@@ -684,14 +725,16 @@ def handleClimateSignalArgs(input_path):
         for dm in downscaling_methods:
             past_path = input_path+'/'+cm+'.'+dm+'.'+era+ \
                 '.ds.'+region+'.metric.maps.nc'
+            print("past_path", past_path)
             for rcp in rcps:
                 future_path = \
                     input_path+'/'+cm+'.'+dm+\
                     '.'+rcp+'.ds.'+region+'.metric.maps.nc'
                 # if ('GARD' in dm):
                 #     print(cm,"and",dm)
-                #     print("past_path :", past_path)
-                #     print("future_path :", future_path)
+                # print("past_path :", past_path)
+                # print("future_path :", future_path)
+                # sys.exit()
 
                 if os.path.exists(past_path) and os.path.exists(future_path):
                     # if ('GARD' in dm):
@@ -703,9 +746,13 @@ def handleClimateSignalArgs(input_path):
                                             model=cm,
                                             dif_file_path=future_path))
                 # else:
-    #                 print("paths not found:", past_path, "or", future_path)
-    # # print('handleClimateSignalArgs fin')
-    #                 sys.exit()
+                #     print("paths not found:")
+                #     print("  - past_path:  ", past_path)
+                #     print("    or")
+                #     print("  - future_path:", future_path)
+                #     sys.exit()
+
+
     return datasets
 
 
@@ -747,14 +794,10 @@ def writeMetricYamlFromFile(metric_path):
     schemes = ds['normscheme'].data
     metrics = list(ds.data_vars)
 
-    # remove null data
-    # ADD BACK IN LATER AS A TEST
-    methods = methods[methods != 'ICARwest']
-    # ADD BACK AFTER DEV
-    # regions = regions[:1]
-    # models = models[:2]
-    # methods = methods[:2]
-    # metrics = metrics[:1]
+    print('regions =', regions)
+    print('models =', models)
+    print('schemes =', schemes)
+    print('metrics =', metrics)
 
     metrics_arr = [prep(m) for m in metrics]
     schemes_arr = {prep(s):s for s in schemes}
@@ -765,7 +808,9 @@ def writeMetricYamlFromFile(metric_path):
         method_arr = []
         combination_arr = []
         for model, method in itertools.product(models, methods):
-            combination_arr.append(method + ' with ' + model)
+            clean_model = clean_str(model)
+            clean_method = clean_str(method)
+            combination_arr.append(clean_method + ' with ' + clean_model)
             model_arr.append(prep(model))
             method_arr.append(prep(method))
 
@@ -819,7 +864,7 @@ def writeMetricYamlFromFile(metric_path):
             #     yaml.dump(yaml_obj, f, sort_keys=False, default_flow_style=True)
         os.makedirs("metrics", exist_ok=True)
         with open("metrics/"+prep(region.replace(' ',''))+"_metrics.js", "w", encoding="utf-8") as f:
-            f.write("// auto-generated; do not edit\n")
+            f.write(f"// auto-generated on {date.today():%Y-%m-%d}; do not edit\n")
             f.write("export const metrics_settings = ")
             json.dump(yaml_obj, f, indent=2, ensure_ascii=False, sort_keys=False)
             f.write(";\n")
@@ -893,24 +938,21 @@ def writeMetricYaml(metric_datasets, ob):
 
 
 def writeEnsembleYaml(maps_datasets):
-    by_model = defaultdict(set)
-    count = 0
+    by_method = defaultdict(lambda: defaultdict(set))
     for ds in maps_datasets:
-        # count += 1
-        # if count > 5:
-        #     continue
-        mod = ds.model.lower().replace('-','_')
+        model = ds.model.lower().replace("-", "_")
         ens = ds.ens.lower().replace('-','_')
-        by_model[mod].add(ens)
-        yaml_obj = {
-            "ensemble": {model: list(ens_set)
-                         for model, ens_set in by_model.items()}
-        }
+        method = ds.method.lower().replace('-','_') # cmip5 or cmip6
+        by_method[method][model].add(ens)
 
-    # sort yaml object
-    yaml_obj['ensemble'] = {
-        model: sorted(members)
-        for model, members in sorted(yaml_obj['ensemble'].items())
+    yaml_obj = {
+        "ensemble": {
+            method: {
+                model: sorted(ens_set)
+                for model, ens_set in sorted(models.items())
+            }
+            for method, models in sorted(by_method.items())
+        }
     }
 
     with open("ensemble.yaml", "w") as f:
@@ -1046,18 +1088,34 @@ def main():
     obs_datasets = []
 
     if options.write_yaml:
-        maps_datasets = findDatasets(options.input_maps_path,
+        input_paths = [
+            '/glade/work/soren/src/icar/data/zarr-data-maps/nca_regional_analysis/global_future_metric_template_cmip5_rcp45/output/cmip5_metrics/global',
+            '/glade/work/soren/src/icar/data/zarr-data-maps/nca_regional_analysis/global_future_metric_template_cmip5_rcp85/output/cmip5_metrics/global',
+            '/glade/work/soren/src/icar/data/zarr-data-maps/nca_regional_analysis/global_future_metric_template_cmip6_ssp245/output/cmip6_metrics/global/',
+            '/glade/work/soren/src/icar/data/zarr-data-maps/nca_regional_analysis/global_future_metric_template_cmip6_ssp370/output/cmip6_metrics/global/',
+            '/glade/work/soren/src/icar/data/zarr-data-maps/nca_regional_analysis/global_future_metric_template_cmip6_ssp585/output/cmip6_metrics/global/',
+        ]
+        maps_datasets = []
+        for input_path in input_paths:
+            maps_datasets += findDatasets(input_path,
                                      '.metric.maps.nc',
                                      'map')
+        print(len(maps_datasets), "datasets")
+
+        maps_datasets[-1].print()
+
         if (maps_datasets[-1].method in ['cmip5', 'cmip6']):
             maps_datasets = addEnsembleDatasets(maps_datasets)
+            print(len(maps_datasets), "datasets after adding ensembles")
             writeEnsembleYaml(maps_datasets)
+            sys.exit('foo')
+
         writeModelYaml(maps_datasets, 'model.yaml', 'model')
 
-        climate_signal_datasets = \
-            handleClimateSignalArgs(options.input_maps_path)
-        writeModelYaml(climate_signal_datasets, 'climateSignal.yaml',
-                       'model_climatesignal')
+        # climate_signal_datasets = \
+        #     handleClimateSignalArgs(options.input_maps_path)
+        # writeModelYaml(climate_signal_datasets, 'climateSignal.yaml',
+        #                'model_climatesignal')
 
         sys.exit('--- finished write yaml option ---')
 
@@ -1108,10 +1166,11 @@ def main():
     if options.write_climate_signal: # todo
         climate_signal_datasets = \
             handleClimateSignalArgs(options.input_maps_path)
+
         for dataset in climate_signal_datasets:
             writeDatasetToZarr(options.climate_signal_path, dataset,
                                write_climate_signal = True)
-        sys.exit('----debugging metric fin-----')
+        sys.exit('--- done with writing climate signal datasets ---')
 
 
     # TODO
@@ -1238,6 +1297,16 @@ def convert_to_zarr_format(ds):
     print("Done Creating Pyramid")
     return dt
 
+def clean_str(string):
+    clean = {
+        'ICAR':'ICARv1',
+        'ICARwest':'ICARv2',
+        'LOCA_8th':'LOCA',
+        'GARD_r2':'GARD_puv',
+        'GARD_r3':'GARD_quv',
+    }
+    return clean.get(string, string)
+
 
 def add_time_random_walk(ds, time_len=17, seed=None):
     rng = np.random.default_rng(seed)
@@ -1268,4 +1337,5 @@ def add_time_random_walk(ds, time_len=17, seed=None):
     return xr.Dataset(out, coords={"time": time, "lat": ds["lat"], "lon": ds["lon"]})
 
 if __name__ == "__main__":
-    main()
+    main(
+)
