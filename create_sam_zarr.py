@@ -19,6 +19,11 @@ from tools import dimensionNames, handleArgs
 
 print("ndpyramid Version = ", ndp.__version__)
 
+# maps_matching_str = '*CMIP5*signal*'
+# maps_matching_str = '*CMIP6*signal*'
+maps_matching_str = 'signal_pr_snr.nc'
+
+
 # Tables of Sam's Input Files
 # note, the files are not guarenteed to have the same set of variables
 #
@@ -270,25 +275,19 @@ def writeDatasetToZarr(output_path, dataset=None,
     #     ds_max = xr.open_dataset(tasmax_path)
 
     # these are breaking for various reasons
-    if 'LOCA2_CMIP6_ssp585' in dataset.file_path:
-        return
-    elif 'GCM_CMIP6_ssp585' in dataset.file_path:
-        return
-    elif 'LOCA2_CMIP6_ssp370' in dataset.file_path:
-        return
-    elif 'GCM_CMIP6_ssp370' in dataset.file_path:
+    if 'GARDLENS_CMIP6_ssp370' in dataset.file_path:
         return
     elif 'DEEPSD_CMIP6_ssp585' in dataset.file_path:
         return
-    elif 'GARDLENS_CMIP6_ssp370' in dataset.file_path:
-        return
-    # trying to build all of CMIP5
-    # elif 'NEXGDDP_CMIP5_signal' in dataset.file_path:
+    # if 'LOCA2_CMIP6_ssp585' in dataset.file_path:
     #     return
-    # elif 'BCSD_CMIP5_signal' in dataset.file_path:
+    # elif 'GCM_CMIP6_ssp585' in dataset.file_path:
     #     return
-    # elif 'LOCA_CMIP5_signal' in dataset.file_path:
+    # elif 'LOCA2_CMIP6_ssp370' in dataset.file_path:
     #     return
+    # elif 'GCM_CMIP6_ssp370' in dataset.file_path:
+    #     return
+
 
 
     # if ds_min != None:
@@ -304,6 +303,12 @@ def writeDatasetToZarr(output_path, dataset=None,
     # variables for zarr creation, value has to be four characters
     new_vars = {
         # --- Sam's metrics ---
+        'mean_prcp':'am_p',
+        'mean_jja_prcp':'jjap',
+        'sum_prcp':'sump',
+        'q95_prcp':'q95p',
+        'std_prcp':'stdp',
+
         'mean_pr':'am_p',
         'mean_jja_pr':'jjap',
         'sum_pr':'sump',
@@ -381,12 +386,55 @@ def writeDatasetToZarr(output_path, dataset=None,
         'pr_gev_50yr':'g_50',
         'pr_gev_100yr':'g100',
         'wet_day_frac':'wdfr',
+        # agreement variables
+        'snr':'snr_', # signal-to-noise ratio
+        # 'snr_abs':'snr_', # signal-to-noise ratio
+        'disagreement':'dagr', # disagreement
     }
+
+
+    if ('_snr.nc' in dataset.file_path):
+        # variables needed for snr
+        signal_to_noise_drop_vars = [
+            'snr_abs',
+            'signal_mean', 'signal_std', 'n_downscaling_models', 'conus_mask'
+        ]
+        if 'quantile' in list(ds.variables):
+            signal_to_noise_drop_vars.append('quantile')
+        if 'quan' in list(ds.variables):
+            signal_to_noise_drop_vars.append('quan')
+        ds['snr'] = np.abs(ds['snr'])
+        ds = ds.drop_vars(signal_to_noise_drop_vars)
+    if ('_agreement.nc' in dataset.file_path):
+        agreement_drop_vars = [
+            'agreement',
+            'hatch_mask',
+            'direction',
+            'agree_positive',
+            'agree_negative',
+            'n_positive',
+            'n_negative',
+            'n_zero',
+            'n_downscaling_models',
+            'conus_mask',
+        ]
+        if 'quantile' in list(ds.variables):
+            agreement_drop_vars.append('quantile')
+        if 'quan' in list(ds.variables):
+            agreement_drop_vars.append('quan')
+        ds = ds.drop_vars(agreement_drop_vars)
+
+
+    if 'member_id' in list(ds.dims):
+        ds = ds.isel(member_id=0)
+
+    print(ds)
+    # sys.exit()
+
 
     # lowercase dimension names
     lowercase_vars = {v: v.lower() for v in ds.data_vars}
     ds = ds.rename(lowercase_vars)
-
 
     # renames - to _
     rename_vars = {v: v.replace("-", "_") for v in ds.data_vars if "-" in v}
@@ -998,9 +1046,6 @@ def main():
     climate_signal_datasets = []
     obs_datasets = []
 
-    maps_matching_str = '*CMIP5*signal*'
-    # maps_matching_str = '*CMIP6*signal*'
-
     if options.write_yaml:
         maps_datasets = findDatasets(options.input_maps_path,
                                      maps_matching_str,
@@ -1021,18 +1066,32 @@ def main():
 
 
     if options.write_maps:
-        maps_datasets = findDatasets(options.input_maps_path,
-                                     maps_matching_str,
-                                     'map')
-        for dataset in maps_datasets:
-            print(dataset.file_path)
+        # maps_datasets = findDatasets(options.input_maps_path,
+        #                              maps_matching_str,
+        #                              'map')
+        metrics = ['pr', 'tasmax']
+        for metric in metrics:
+            # maps_matching_f = f'signal_{metric}_snr.nc'
+            maps_matching_f = f'signal_{metric}_agreement.nc'
 
-        # writeModelYaml(maps_datasets, 'maps.yaml',
-        #                'model_maps')
-        # sys.exit()
-        for dataset in maps_datasets:
-            writeDatasetToZarr(options.output_maps_path, dataset,
-                               write_maps = True)
+            ds = Dataset(options.input_maps_path + '/' + maps_matching_f,
+                     'map',
+                     '1950-2100',
+                     'CONUS',
+                     method='',
+                     model='',
+                     metric=metric)
+            maps_datasets = [ds]
+
+            for dataset in maps_datasets:
+                print(dataset.file_path)
+
+            # writeModelYaml(maps_datasets, 'maps.yaml',
+            #                'model_maps')
+
+            for dataset in maps_datasets:
+                writeDatasetToZarr(options.output_maps_path, dataset,
+                                   write_maps = True)
         sys.exit('--- finished writing maps ---')
 
     print('---fin---')
